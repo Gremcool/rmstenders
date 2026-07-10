@@ -451,77 +451,79 @@ with tab_upload:
     Must have exact column headers: `Tender No` (or `#`), `Tender reference number`, `Title of the tender`, `End user`, `SMT date/PP Planned date of publication`, `Reason of approval/for initiating tender`, `Method of tender`, `Responsible officer`, `ITC`, `Submitted date to ITC for TD approval`, `Comments from ITC`, `Current status`
     """)
 
-    uploaded_file = st.file_uploader("Upload File", type=["csv", "xlsx", "xls"])
+    # CRITICAL FIX: The form locks the submit button to the screen so the proxy refresh can't hide it!
+    with st.form("upload_form", clear_on_submit=True):
+        uploaded_file = st.file_uploader("Upload File", type=["csv", "xlsx", "xls"])
+        submit_upload = st.form_submit_button("Process and Import Data", type="primary")
 
-    if uploaded_file is not None:
-        if st.button("Process and Import Data", type="primary"):
-            with st.spinner("Importing Data..."):
-                try:
-                    # FIX: Safely parse CSV without the buggy sniffer, or read Excel directly
-                    if uploaded_file.name.endswith('.csv'):
-                        try:
-                            import_df = pd.read_csv(uploaded_file)
-                        except Exception:
-                            uploaded_file.seek(0)
-                            import_df = pd.read_csv(uploaded_file, sep=';')
-                    else:
-                        import_df = pd.read_excel(uploaded_file)
-                    
-                    import_df.columns = import_df.columns.str.strip()
-                    import_df.dropna(how='all', inplace=True)
-                    
-                    # Prepare rows for bulk insert
-                    rows_to_insert = []
-                    
-                    for index, row in import_df.iterrows():
-                        raw_ref = str(row.get('Tender reference number', '')).strip()
-                        if not raw_ref or raw_ref.lower() == 'nan':
-                            raw_ref = f"N/A-{index}"
+        if submit_upload:
+            if uploaded_file is None:
+                st.warning("⚠️ Please select a file first before clicking Process.")
+            else:
+                with st.spinner("Importing Data..."):
+                    try:
+                        if uploaded_file.name.endswith('.csv'):
+                            try:
+                                import_df = pd.read_csv(uploaded_file)
+                            except Exception:
+                                uploaded_file.seek(0)
+                                import_df = pd.read_csv(uploaded_file, sep=';')
+                        else:
+                            import_df = pd.read_excel(uploaded_file)
                         
-                        t_no = str(row.get('Tender No', row.get('#', ''))).strip()
-                        if t_no.endswith('.0'): t_no = t_no[:-2]
-                        if t_no.lower() == 'nan': t_no = ""
-
-                        raw_smt = str(row.get('SMT date/PP Planned date of publication', '')).strip()
-                        try: clean_smt = pd.to_datetime(raw_smt).strftime('%Y-%m-%d') if raw_smt and raw_smt.lower() != 'nan' else ""
-                        except: clean_smt = ""
+                        import_df.columns = import_df.columns.str.strip()
+                        import_df.dropna(how='all', inplace=True)
                         
-                        raw_itc_d = str(row.get('Submitted date to ITC for TD approval', '')).strip()
-                        try: clean_itc_d = pd.to_datetime(raw_itc_d).strftime('%Y-%m-%d') if raw_itc_d and raw_itc_d.lower() != 'nan' else ""
-                        except: clean_itc_d = ""
-
-                        raw_itc = str(row.get('ITC', '')).strip().upper().replace(" ", "")
-                        clean_itc = raw_itc if raw_itc in ["ITC1", "ITC2", "ITC3", "ITC4"] else ""
-
-                        row_dict = {
-                            'fiscal_year': selected_fy,
-                            'Tender No': t_no,
-                            'Tender reference number': raw_ref,
-                            'Title of the tender': str(row.get('Title of the tender', '')).strip() if pd.notna(row.get('Title of the tender')) else "",
-                            'End user': str(row.get('End user', '')).strip() if pd.notna(row.get('End user')) else "",
-                            'SMT date/PP Planned date of publication': clean_smt,
-                            'Reason of approval/for initiating tender': str(row.get('Reason of approval/for initiating tender', '')).strip() if pd.notna(row.get('Reason of approval/for initiating tender')) else "",
-                            'Method of tender': str(row.get('Method of tender', '')).strip() if pd.notna(row.get('Method of tender')) else "",
-                            'Responsible officer': str(row.get('Responsible officer', '')).strip() if pd.notna(row.get('Responsible officer')) else "",
-                            'ITC': clean_itc,
-                            'Submitted date to ITC for TD approval': clean_itc_d,
-                            'Comments from ITC': str(row.get('Comments from ITC', '')).strip() if pd.notna(row.get('Comments from ITC')) else "",
-                            'Current status': str(row.get('Current status', '')).strip() if pd.notna(row.get('Current status')) else ""
-                        }
+                        rows_to_insert = []
                         
-                        rows_to_insert.append(row_dict)
-                    
-                    # CRITICAL FIX: Push everything to database at once instead of one by one
-                    if rows_to_insert:
-                        db.upsert_tenders_bulk(rows_to_insert)
-                    
-                    db.log_action(f"📁 Bulk uploaded {len(rows_to_insert)} tenders into {selected_fy}.")
-                    st.success(f"Successfully processed {len(rows_to_insert)} tenders into Fiscal Year {selected_fy}!")
-                    
-                    time.sleep(1)
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error processing file: {e}. Please ensure it is a valid Excel or CSV file matching the required headers.")
+                        for index, row in import_df.iterrows():
+                            raw_ref = str(row.get('Tender reference number', '')).strip()
+                            if not raw_ref or raw_ref.lower() == 'nan':
+                                raw_ref = f"N/A-{index}"
+                            
+                            t_no = str(row.get('Tender No', row.get('#', ''))).strip()
+                            if t_no.endswith('.0'): t_no = t_no[:-2]
+                            if t_no.lower() == 'nan': t_no = ""
+
+                            raw_smt = str(row.get('SMT date/PP Planned date of publication', '')).strip()
+                            try: clean_smt = pd.to_datetime(raw_smt).strftime('%Y-%m-%d') if raw_smt and raw_smt.lower() != 'nan' else ""
+                            except: clean_smt = ""
+                            
+                            raw_itc_d = str(row.get('Submitted date to ITC for TD approval', '')).strip()
+                            try: clean_itc_d = pd.to_datetime(raw_itc_d).strftime('%Y-%m-%d') if raw_itc_d and raw_itc_d.lower() != 'nan' else ""
+                            except: clean_itc_d = ""
+
+                            raw_itc = str(row.get('ITC', '')).strip().upper().replace(" ", "")
+                            clean_itc = raw_itc if raw_itc in ["ITC1", "ITC2", "ITC3", "ITC4"] else ""
+
+                            row_dict = {
+                                'fiscal_year': selected_fy,
+                                'Tender No': t_no,
+                                'Tender reference number': raw_ref,
+                                'Title of the tender': str(row.get('Title of the tender', '')).strip() if pd.notna(row.get('Title of the tender')) else "",
+                                'End user': str(row.get('End user', '')).strip() if pd.notna(row.get('End user')) else "",
+                                'SMT date/PP Planned date of publication': clean_smt,
+                                'Reason of approval/for initiating tender': str(row.get('Reason of approval/for initiating tender', '')).strip() if pd.notna(row.get('Reason of approval/for initiating tender')) else "",
+                                'Method of tender': str(row.get('Method of tender', '')).strip() if pd.notna(row.get('Method of tender')) else "",
+                                'Responsible officer': str(row.get('Responsible officer', '')).strip() if pd.notna(row.get('Responsible officer')) else "",
+                                'ITC': clean_itc,
+                                'Submitted date to ITC for TD approval': clean_itc_d,
+                                'Comments from ITC': str(row.get('Comments from ITC', '')).strip() if pd.notna(row.get('Comments from ITC')) else "",
+                                'Current status': str(row.get('Current status', '')).strip() if pd.notna(row.get('Current status')) else ""
+                            }
+                            
+                            rows_to_insert.append(row_dict)
+                        
+                        if rows_to_insert:
+                            db.upsert_tenders_bulk(rows_to_insert)
+                        
+                        db.log_action(f"📁 Bulk uploaded {len(rows_to_insert)} tenders into {selected_fy}.")
+                        st.success(f"Successfully processed {len(rows_to_insert)} tenders into Fiscal Year {selected_fy}!")
+                        
+                        time.sleep(1)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error processing file: {e}. Please ensure it is a valid Excel or CSV file matching the required headers.")
 
 # ==========================================
 # TAB 3: MODIFICATION LOGS
