@@ -17,7 +17,6 @@ def get_conn():
 def init_db():
     conn = get_conn()
     c = conn.cursor()
-    # Tenders Table Expanded for 12 Columns
     c.execute('''
         CREATE TABLE IF NOT EXISTS tenders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -36,7 +35,6 @@ def init_db():
             status TEXT
         )
     ''')
-    # Logs Table
     c.execute('''
         CREATE TABLE IF NOT EXISTS logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,7 +42,6 @@ def init_db():
             message TEXT
         )
     ''')
-    # Fiscal Years Table
     c.execute('''
         CREATE TABLE IF NOT EXISTS fiscal_years (
             year TEXT PRIMARY KEY
@@ -54,11 +51,14 @@ def init_db():
     conn.commit()
     conn.close()
 
+# FIX: Bypass pandas read_sql to avoid PyArrow Segmentation Fault
 def get_fiscal_years():
     conn = get_conn()
-    df = pd.read_sql("SELECT year FROM fiscal_years ORDER BY year DESC", conn)
+    c = conn.cursor()
+    c.execute("SELECT year FROM fiscal_years ORDER BY year DESC")
+    years = [row[0] for row in c.fetchall()]
     conn.close()
-    return df['year'].tolist()
+    return years
 
 def add_fiscal_year(year):
     conn = get_conn()
@@ -76,16 +76,26 @@ def log_action(message):
     conn.commit()
     conn.close()
 
+# FIX: Bypass pandas read_sql to avoid PyArrow Segmentation Fault
 def get_logs():
     conn = get_conn()
-    logs = pd.read_sql("SELECT timestamp, message FROM logs ORDER BY id DESC LIMIT 100", conn)
+    c = conn.cursor()
+    c.execute("SELECT timestamp, message FROM logs ORDER BY id DESC LIMIT 100")
+    data = c.fetchall()
+    columns = [desc[0] for desc in c.description]
     conn.close()
-    return logs
+    return pd.DataFrame(data, columns=columns)
 
+# FIX: Bypass pandas read_sql to avoid PyArrow Segmentation Fault
 def load_data(fiscal_year):
     conn = get_conn()
-    df = pd.read_sql("SELECT * FROM tenders WHERE fiscal_year = ?", conn, params=(fiscal_year,))
+    c = conn.cursor()
+    c.execute("SELECT * FROM tenders WHERE fiscal_year = ?", (fiscal_year,))
+    data = c.fetchall()
+    columns = [desc[0] for desc in c.description]
     conn.close()
+    
+    df = pd.DataFrame(data, columns=columns)
     
     rename_map = {
         'tender_no': 'Tender No',
@@ -108,7 +118,6 @@ def upsert_tender(row_data):
     conn = get_conn()
     c = conn.cursor()
     
-    # Check if this tender ref already exists in this fiscal year
     c.execute('''
         SELECT id FROM tenders WHERE tender_ref = ? AND fiscal_year = ?
     ''', (row_data.get('Tender reference number', ''), row_data['fiscal_year']))
@@ -160,7 +169,6 @@ def upsert_tender(row_data):
     conn.commit()
     conn.close()
 
-# --- THE CRITICAL MISSING FUNCTION FOR RAILWAY ---
 def upsert_tenders_bulk(rows_data):
     conn = get_conn()
     c = conn.cursor()
