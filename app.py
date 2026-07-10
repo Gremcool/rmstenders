@@ -87,7 +87,6 @@ def edit_row_dialog(row_data, active_fy):
     st.markdown("### 💬 Comments from ITC")
     new_itc_com = st_quill(value=row_data.get("Comments from ITC", ""), placeholder="Write comments here...", html=True, key="quill_itc_com")
     
-    # Updated to width="stretch"
     if st.button("Save Changes", type="primary", width="stretch"):
         updated_row = {
             'fiscal_year': active_fy,
@@ -114,7 +113,6 @@ def edit_row_dialog(row_data, active_fy):
 col_logo, col_title = st.columns([1, 15])
 with col_logo:
     if os.path.exists("logo.jpg"):
-        # Updated to width="stretch"
         st.image("logo.jpg", width="stretch")
     else:
         st.markdown("<h1 style='text-align: center; margin: 0;'>🏢</h1>", unsafe_allow_html=True)
@@ -200,7 +198,6 @@ with tab_tracker:
                             xaxis_title="ITC Status", yaxis_title="Total Tenders",
                             plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', font=dict(color='white')
                         )
-                        # Updated to width="stretch"
                         st.plotly_chart(fig_itc, width="stretch")
                     else:
                         st.info("Not enough valid data to plot ITC distribution.")
@@ -220,7 +217,6 @@ with tab_tracker:
                             xaxis_title="Responsible Officer", yaxis_title="Total Active Tenders",
                             plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', font=dict(color='white')
                         )
-                        # Updated to width="stretch"
                         st.plotly_chart(fig_off, width="stretch")
                     else:
                         st.info("Not enough valid data to plot Officer allocation.")
@@ -461,15 +457,22 @@ with tab_upload:
         if st.button("Process and Import Data", type="primary"):
             with st.spinner("Importing Data..."):
                 try:
+                    # FIX: Safely parse CSV without the buggy sniffer, or read Excel directly
                     if uploaded_file.name.endswith('.csv'):
-                        import_df = pd.read_csv(uploaded_file, sep=None, engine='python')
+                        try:
+                            import_df = pd.read_csv(uploaded_file)
+                        except Exception:
+                            uploaded_file.seek(0)
+                            import_df = pd.read_csv(uploaded_file, sep=';')
                     else:
                         import_df = pd.read_excel(uploaded_file)
                     
                     import_df.columns = import_df.columns.str.strip()
                     import_df.dropna(how='all', inplace=True)
                     
-                    rows_added = 0
+                    # Prepare rows for bulk insert
+                    rows_to_insert = []
+                    
                     for index, row in import_df.iterrows():
                         raw_ref = str(row.get('Tender reference number', '')).strip()
                         if not raw_ref or raw_ref.lower() == 'nan':
@@ -506,11 +509,14 @@ with tab_upload:
                             'Current status': str(row.get('Current status', '')).strip() if pd.notna(row.get('Current status')) else ""
                         }
                         
-                        db.upsert_tender(row_dict)
-                        rows_added += 1
+                        rows_to_insert.append(row_dict)
                     
-                    db.log_action(f"📁 Bulk uploaded {rows_added} tenders into {selected_fy}.")
-                    st.success(f"Successfully processed {rows_added} tenders into Fiscal Year {selected_fy}!")
+                    # CRITICAL FIX: Push everything to database at once instead of one by one
+                    if rows_to_insert:
+                        db.upsert_tenders_bulk(rows_to_insert)
+                    
+                    db.log_action(f"📁 Bulk uploaded {len(rows_to_insert)} tenders into {selected_fy}.")
+                    st.success(f"Successfully processed {len(rows_to_insert)} tenders into Fiscal Year {selected_fy}!")
                     
                     time.sleep(1)
                     st.rerun()
@@ -527,7 +533,6 @@ with tab_logs:
     logs_df = db.get_logs()
     
     if not logs_df.empty:
-        # Updated to width="stretch"
         st.dataframe(
             logs_df, 
             hide_index=True, 

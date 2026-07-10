@@ -108,7 +108,6 @@ def upsert_tender(row_data):
     conn = get_conn()
     c = conn.cursor()
     
-    # Check if this tender ref already exists in this fiscal year
     c.execute('''
         SELECT id FROM tenders WHERE tender_ref = ? AND fiscal_year = ?
     ''', (row_data.get('Tender reference number', ''), row_data['fiscal_year']))
@@ -157,6 +156,64 @@ def upsert_tender(row_data):
             row_data.get('Comments from ITC', ''),
             row_data.get('Current status', 'Planned')
         ))
+    conn.commit()
+    conn.close()
+
+# CRITICAL FIX: Bulk upsert function so Railway doesn't choke on 50 database opens/closes!
+def upsert_tenders_bulk(rows_data):
+    conn = get_conn()
+    c = conn.cursor()
+    
+    for row_data in rows_data:
+        c.execute('''
+            SELECT id FROM tenders WHERE tender_ref = ? AND fiscal_year = ?
+        ''', (row_data.get('Tender reference number', ''), row_data['fiscal_year']))
+        existing = c.fetchone()
+        
+        if existing:
+            c.execute('''
+                UPDATE tenders SET 
+                    tender_no = ?, title = ?, end_user = ?, smt_date = ?, reason = ?, 
+                    method = ?, responsible_officer = ?, itc = ?, itc_submitted_date = ?, 
+                    itc_comments = ?, status = ?
+                WHERE id = ?
+            ''', (
+                row_data.get('Tender No', ''),
+                row_data.get('Title of the tender', ''),
+                row_data.get('End user', ''),
+                row_data.get('SMT date/PP Planned date of publication', ''),
+                row_data.get('Reason of approval/for initiating tender', ''),
+                row_data.get('Method of tender', ''),
+                row_data.get('Responsible officer', ''),
+                row_data.get('ITC', ''),
+                row_data.get('Submitted date to ITC for TD approval', ''),
+                row_data.get('Comments from ITC', ''),
+                row_data.get('Current status', ''),
+                existing[0]
+            ))
+        else:
+            c.execute('''
+                INSERT INTO tenders (
+                    fiscal_year, tender_no, tender_ref, title, end_user, smt_date, reason,
+                    method, responsible_officer, itc, itc_submitted_date, itc_comments, status
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                row_data['fiscal_year'],
+                row_data.get('Tender No', ''),
+                row_data.get('Tender reference number', ''),
+                row_data.get('Title of the tender', ''),
+                row_data.get('End user', ''),
+                row_data.get('SMT date/PP Planned date of publication', ''),
+                row_data.get('Reason of approval/for initiating tender', ''),
+                row_data.get('Method of tender', ''),
+                row_data.get('Responsible officer', ''),
+                row_data.get('ITC', ''),
+                row_data.get('Submitted date to ITC for TD approval', ''),
+                row_data.get('Comments from ITC', ''),
+                row_data.get('Current status', 'Planned')
+            ))
+    
     conn.commit()
     conn.close()
 
