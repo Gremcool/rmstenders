@@ -112,7 +112,6 @@ def edit_row_dialog(row_data, active_fy):
 # --- HEADER & FISCAL YEAR MANAGEMENT ---
 col_logo, col_title = st.columns([1, 15])
 with col_logo:
-    # Safely load the logo if it exists in the folder
     if os.path.exists("logo.jpg"):
         st.image("logo.jpg", use_container_width=True)
     else:
@@ -142,7 +141,7 @@ with col_fy2:
 st.markdown("<hr style='margin-top: 15px; margin-bottom: 15px; border: 0; border-top: 1px solid #eee;' />", unsafe_allow_html=True)
 
 # --- TABS ---
-tab_tracker, tab_upload, tab_logs = st.tabs(["📊 Tender Tracker & Analytics", "📂 Upload CSV", "📝 Edit Trail"])
+tab_tracker, tab_upload, tab_logs = st.tabs(["📊 Tender Tracker & Analytics", "📂 Upload Data", "📝 Edit Trail"])
 
 # ==========================================
 # TAB 1: THE MAIN TRACKER
@@ -151,7 +150,7 @@ with tab_tracker:
     df = db.load_data(selected_fy)
     
     if df.empty:
-        st.warning(f"📭 No tenders found for {selected_fy}. Upload a CSV or add manually.")
+        st.warning(f"📭 No tenders found for {selected_fy}. Upload an Excel/CSV file or add manually.")
     else:
         if 'Tender No' in df.columns:
             df['Tender No'] = df['Tender No'].astype(str).str.replace(r'\.0$', '', regex=True).replace('nan', '')
@@ -443,70 +442,78 @@ with tab_tracker:
         st.download_button(label="💾 Export Dashboard to CSV", data=csv_export, file_name=f"Tenders_{selected_fy}_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv")
 
 # ==========================================
-# TAB 2: UPLOAD CSV
+# TAB 2: UPLOAD CSV / EXCEL
 # ==========================================
 with tab_upload:
-    st.subheader(f"📂 Upload CSV to [{selected_fy}]")
+    st.subheader(f"📂 Upload Data to [{selected_fy}]")
     st.markdown("""
-    Your CSV must have these exact column headers to map perfectly:
-    `Tender No` (or `#`), `Tender reference number`, `Title of the tender`, `End user`, `SMT date/PP Planned date of publication`, `Reason of approval/for initiating tender`, `Method of tender`, `Responsible officer`, `ITC`, `Submitted date to ITC for TD approval`, `Comments from ITC`, `Current status`
+    **You can now upload standard Excel (.xlsx) or CSV files.**
+    Must have exact column headers: `Tender No` (or `#`), `Tender reference number`, `Title of the tender`, `End user`, `SMT date/PP Planned date of publication`, `Reason of approval/for initiating tender`, `Method of tender`, `Responsible officer`, `ITC`, `Submitted date to ITC for TD approval`, `Comments from ITC`, `Current status`
     """)
 
-    uploaded_csv = st.file_uploader("Upload CSV", type=["csv"])
+    # We now accept BOTH formats directly!
+    uploaded_file = st.file_uploader("Upload File", type=["csv", "xlsx", "xls"])
 
-    if uploaded_csv is not None:
-        if st.button("Process and Import CSV", type="primary"):
+    if uploaded_file is not None:
+        if st.button("Process and Import Data", type="primary"):
             with st.spinner("Importing Data..."):
-                import_df = pd.read_csv(uploaded_csv)
-                
-                import_df.columns = import_df.columns.str.strip()
-                import_df.dropna(how='all', inplace=True)
-                
-                rows_added = 0
-                for index, row in import_df.iterrows():
-                    raw_ref = str(row.get('Tender reference number', '')).strip()
-                    if not raw_ref or raw_ref.lower() == 'nan':
-                        raw_ref = f"N/A-{index}"
+                try:
+                    # Dynamically read Excel or auto-detect CSV delimiters
+                    if uploaded_file.name.endswith('.csv'):
+                        import_df = pd.read_csv(uploaded_file, sep=None, engine='python')
+                    else:
+                        import_df = pd.read_excel(uploaded_file)
                     
-                    t_no = str(row.get('Tender No', row.get('#', ''))).strip()
-                    if t_no.endswith('.0'): t_no = t_no[:-2]
-                    if t_no.lower() == 'nan': t_no = ""
-
-                    raw_smt = str(row.get('SMT date/PP Planned date of publication', '')).strip()
-                    try: clean_smt = pd.to_datetime(raw_smt).strftime('%Y-%m-%d') if raw_smt and raw_smt.lower() != 'nan' else ""
-                    except: clean_smt = ""
+                    import_df.columns = import_df.columns.str.strip()
+                    import_df.dropna(how='all', inplace=True)
                     
-                    raw_itc_d = str(row.get('Submitted date to ITC for TD approval', '')).strip()
-                    try: clean_itc_d = pd.to_datetime(raw_itc_d).strftime('%Y-%m-%d') if raw_itc_d and raw_itc_d.lower() != 'nan' else ""
-                    except: clean_itc_d = ""
+                    rows_added = 0
+                    for index, row in import_df.iterrows():
+                        raw_ref = str(row.get('Tender reference number', '')).strip()
+                        if not raw_ref or raw_ref.lower() == 'nan':
+                            raw_ref = f"N/A-{index}"
+                        
+                        t_no = str(row.get('Tender No', row.get('#', ''))).strip()
+                        if t_no.endswith('.0'): t_no = t_no[:-2]
+                        if t_no.lower() == 'nan': t_no = ""
 
-                    raw_itc = str(row.get('ITC', '')).strip().upper().replace(" ", "")
-                    clean_itc = raw_itc if raw_itc in ["ITC1", "ITC2", "ITC3", "ITC4"] else ""
+                        raw_smt = str(row.get('SMT date/PP Planned date of publication', '')).strip()
+                        try: clean_smt = pd.to_datetime(raw_smt).strftime('%Y-%m-%d') if raw_smt and raw_smt.lower() != 'nan' else ""
+                        except: clean_smt = ""
+                        
+                        raw_itc_d = str(row.get('Submitted date to ITC for TD approval', '')).strip()
+                        try: clean_itc_d = pd.to_datetime(raw_itc_d).strftime('%Y-%m-%d') if raw_itc_d and raw_itc_d.lower() != 'nan' else ""
+                        except: clean_itc_d = ""
 
-                    row_dict = {
-                        'fiscal_year': selected_fy,
-                        'Tender No': t_no,
-                        'Tender reference number': raw_ref,
-                        'Title of the tender': str(row.get('Title of the tender', '')).strip() if pd.notna(row.get('Title of the tender')) else "",
-                        'End user': str(row.get('End user', '')).strip() if pd.notna(row.get('End user')) else "",
-                        'SMT date/PP Planned date of publication': clean_smt,
-                        'Reason of approval/for initiating tender': str(row.get('Reason of approval/for initiating tender', '')).strip() if pd.notna(row.get('Reason of approval/for initiating tender')) else "",
-                        'Method of tender': str(row.get('Method of tender', '')).strip() if pd.notna(row.get('Method of tender')) else "",
-                        'Responsible officer': str(row.get('Responsible officer', '')).strip() if pd.notna(row.get('Responsible officer')) else "",
-                        'ITC': clean_itc,
-                        'Submitted date to ITC for TD approval': clean_itc_d,
-                        'Comments from ITC': str(row.get('Comments from ITC', '')).strip() if pd.notna(row.get('Comments from ITC')) else "",
-                        'Current status': str(row.get('Current status', '')).strip() if pd.notna(row.get('Current status')) else ""
-                    }
+                        raw_itc = str(row.get('ITC', '')).strip().upper().replace(" ", "")
+                        clean_itc = raw_itc if raw_itc in ["ITC1", "ITC2", "ITC3", "ITC4"] else ""
+
+                        row_dict = {
+                            'fiscal_year': selected_fy,
+                            'Tender No': t_no,
+                            'Tender reference number': raw_ref,
+                            'Title of the tender': str(row.get('Title of the tender', '')).strip() if pd.notna(row.get('Title of the tender')) else "",
+                            'End user': str(row.get('End user', '')).strip() if pd.notna(row.get('End user')) else "",
+                            'SMT date/PP Planned date of publication': clean_smt,
+                            'Reason of approval/for initiating tender': str(row.get('Reason of approval/for initiating tender', '')).strip() if pd.notna(row.get('Reason of approval/for initiating tender')) else "",
+                            'Method of tender': str(row.get('Method of tender', '')).strip() if pd.notna(row.get('Method of tender')) else "",
+                            'Responsible officer': str(row.get('Responsible officer', '')).strip() if pd.notna(row.get('Responsible officer')) else "",
+                            'ITC': clean_itc,
+                            'Submitted date to ITC for TD approval': clean_itc_d,
+                            'Comments from ITC': str(row.get('Comments from ITC', '')).strip() if pd.notna(row.get('Comments from ITC')) else "",
+                            'Current status': str(row.get('Current status', '')).strip() if pd.notna(row.get('Current status')) else ""
+                        }
+                        
+                        db.upsert_tender(row_dict)
+                        rows_added += 1
                     
-                    db.upsert_tender(row_dict)
-                    rows_added += 1
-                
-                db.log_action(f"📁 Bulk uploaded {rows_added} tenders into {selected_fy} via CSV.")
-                st.success(f"Successfully processed {rows_added} tenders into Fiscal Year {selected_fy}!")
-                
-                time.sleep(1)
-                st.rerun()
+                    db.log_action(f"📁 Bulk uploaded {rows_added} tenders into {selected_fy}.")
+                    st.success(f"Successfully processed {rows_added} tenders into Fiscal Year {selected_fy}!")
+                    
+                    time.sleep(1)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error processing file: {e}. Please ensure it is a valid Excel or CSV file matching the required headers.")
 
 # ==========================================
 # TAB 3: MODIFICATION LOGS
