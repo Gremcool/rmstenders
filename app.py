@@ -223,7 +223,7 @@ with tab_tracker:
                 else:
                     st.info("No Responsible Officers assigned yet.")
 
-        st.info("💡 **Quick Guide:** Click any cell to inline edit! Empty Date and Status cells now have quick-pickers.")
+        st.info("💡 **Quick Guide:** Click any cell to inline edit! Check the box next to a Tender No to open the rich-text editor.")
         
         with st.expander("➕ Add New Tender manually", expanded=False):
             with st.form("add_tender_form", clear_on_submit=True):
@@ -275,8 +275,11 @@ with tab_tracker:
         gb = GridOptionsBuilder.from_dataframe(df.drop(columns=['fiscal_year'], errors='ignore'))
         gb.configure_column('id', hide=True) 
         
-        gb.configure_default_column(wrapText=True, autoHeight=True, editable=True)
+        # FIX: Removed the squishing problem by adding rigid minWidths 
+        gb.configure_default_column(wrapText=True, autoHeight=True, editable=True, minWidth=150)
         gb.configure_grid_options(singleClickEdit=True, alwaysShowVerticalScroll=True, domLayout='autoHeight')
+        
+        # FIX: Enable the selection mode, and securely anchor the checkbox to the first column
         gb.configure_selection(selection_mode="single", use_checkbox=True)
         
         rich_text_renderer = JsCode("""
@@ -329,19 +332,20 @@ with tab_tracker:
 
         rich_text_opts = {"editable": False, "cellRenderer": rich_text_renderer}
 
-        gb.configure_column('Tender No', width=120)
-        gb.configure_column('Tender reference number', width=300, editable=False) 
-        gb.configure_column('Title of the tender', width=450, **rich_text_opts)
-        gb.configure_column('Reason of approval/for initiating tender', width=450, **rich_text_opts)
-        gb.configure_column('Comments from ITC', width=350, **rich_text_opts)
-        gb.configure_column('End user', width=160)
-        gb.configure_column('Responsible officer', width=220)
+        # FIX: Checkboxes securely placed next to Tender No, and columns forced to stay wide
+        gb.configure_column('Tender No', width=120, minWidth=120, checkboxSelection=True)
+        gb.configure_column('Tender reference number', width=250, minWidth=250, editable=False) 
+        gb.configure_column('Title of the tender', width=400, minWidth=400, **rich_text_opts)
+        gb.configure_column('Reason of approval/for initiating tender', width=400, minWidth=400, **rich_text_opts)
+        gb.configure_column('Comments from ITC', width=350, minWidth=350, **rich_text_opts)
+        gb.configure_column('End user', width=150, minWidth=150)
+        gb.configure_column('Responsible officer', width=200, minWidth=200)
         
-        gb.configure_column("Method of tender", editable=True, cellEditor='agSelectCellEditor', cellEditorParams={'values': METHOD_OPTIONS}, width=160)
-        gb.configure_column("ITC", editable=True, cellEditor='agSelectCellEditor', cellEditorParams={'values': ITC_OPTIONS}, width=120)
+        gb.configure_column("Method of tender", editable=True, cellEditor='agSelectCellEditor', cellEditorParams={'values': METHOD_OPTIONS}, width=160, minWidth=160)
+        gb.configure_column("ITC", editable=True, cellEditor='agSelectCellEditor', cellEditorParams={'values': ITC_OPTIONS}, width=120, minWidth=120)
         
-        gb.configure_column('SMT date/PP Planned date of publication', editable=True, width=250, cellEditor=custom_date_editor, valueFormatter=date_formatter)
-        gb.configure_column('Submitted date to ITC for TD approval', editable=True, width=250, cellEditor=custom_date_editor, valueFormatter=date_formatter)
+        gb.configure_column('SMT date/PP Planned date of publication', editable=True, width=250, minWidth=250, cellEditor=custom_date_editor, valueFormatter=date_formatter)
+        gb.configure_column('Submitted date to ITC for TD approval', editable=True, width=250, minWidth=250, cellEditor=custom_date_editor, valueFormatter=date_formatter)
         
         status_cellstyle = JsCode("""
         function(params) {
@@ -354,12 +358,10 @@ with tab_tracker:
         }
         """)
         
-        gb.configure_column("Current status", editable=True, pinned='right', cellStyle=status_cellstyle, cellEditor='agSelectCellEditor', cellEditorParams={'values': STATUS_OPTIONS}, width=160)
+        gb.configure_column("Current status", editable=True, pinned='right', cellStyle=status_cellstyle, cellEditor='agSelectCellEditor', cellEditorParams={'values': STATUS_OPTIONS}, width=160, minWidth=160)
 
+        # FIX: Removed the destructive "overflow: visible" CSS that killed horizontal scrolling
         custom_css = {
-            ".ag-root-wrapper": {"overflow": "visible !important"},
-            ".ag-root-wrapper-body": {"overflow": "visible !important"},
-            ".ag-root": {"overflow": "visible !important"},
             ".ag-header": {
                 "position": "sticky !important",
                 "top": "0px !important",
@@ -379,12 +381,19 @@ with tab_tracker:
         action_container_bottom = st.empty()
 
         selected_rows = grid_response.get("selected_rows")
-        if selected_rows is not None and len(selected_rows) > 0:
-            if isinstance(selected_rows, pd.DataFrame):
+        
+        # Handle AgGrid versions differences natively
+        has_selection = False
+        if isinstance(selected_rows, pd.DataFrame):
+            if not selected_rows.empty:
+                has_selection = True
                 selected_data = selected_rows.iloc[0].to_dict()
-            else:
+        elif isinstance(selected_rows, list):
+            if len(selected_rows) > 0:
+                has_selection = True
                 selected_data = selected_rows[0]
-                
+
+        if has_selection:
             with action_container_top:
                 if st.button("✏️ Edit Selected Row ⬆️", type="primary", key="btn_edit_top"):
                     edit_row_dialog(selected_data, selected_fy)
@@ -451,7 +460,6 @@ with tab_upload:
     Must have exact column headers: `Tender No` (or `#`), `Tender reference number`, `Title of the tender`, `End user`, `SMT date/PP Planned date of publication`, `Reason of approval/for initiating tender`, `Method of tender`, `Responsible officer`, `ITC`, `Submitted date to ITC for TD approval`, `Comments from ITC`, `Current status`
     """)
 
-    # CRITICAL FIX: The form locks the submit button to the screen so the proxy refresh can't hide it!
     with st.form("upload_form", clear_on_submit=True):
         uploaded_file = st.file_uploader("Upload File", type=["csv", "xlsx", "xls"])
         submit_upload = st.form_submit_button("Process and Import Data", type="primary")
