@@ -108,6 +108,7 @@ def upsert_tender(row_data):
     conn = get_conn()
     c = conn.cursor()
     
+    # Check if this tender ref already exists in this fiscal year
     c.execute('''
         SELECT id FROM tenders WHERE tender_ref = ? AND fiscal_year = ?
     ''', (row_data.get('Tender reference number', ''), row_data['fiscal_year']))
@@ -159,7 +160,7 @@ def upsert_tender(row_data):
     conn.commit()
     conn.close()
 
-# CRITICAL FIX: Bulk upsert function so Railway doesn't choke on 50 database opens/closes!
+# --- THE CRITICAL MISSING FUNCTION FOR RAILWAY ---
 def upsert_tenders_bulk(rows_data):
     conn = get_conn()
     c = conn.cursor()
