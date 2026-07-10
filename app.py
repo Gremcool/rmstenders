@@ -87,7 +87,8 @@ def edit_row_dialog(row_data, active_fy):
     st.markdown("### 💬 Comments from ITC")
     new_itc_com = st_quill(value=row_data.get("Comments from ITC", ""), placeholder="Write comments here...", html=True, key="quill_itc_com")
     
-    if st.button("Save Changes", type="primary", use_container_width=True):
+    # Updated to width="stretch"
+    if st.button("Save Changes", type="primary", width="stretch"):
         updated_row = {
             'fiscal_year': active_fy,
             'Tender No': new_t_no,
@@ -113,7 +114,8 @@ def edit_row_dialog(row_data, active_fy):
 col_logo, col_title = st.columns([1, 15])
 with col_logo:
     if os.path.exists("logo.jpg"):
-        st.image("logo.jpg", use_container_width=True)
+        # Updated to width="stretch"
+        st.image("logo.jpg", width="stretch")
     else:
         st.markdown("<h1 style='text-align: center; margin: 0;'>🏢</h1>", unsafe_allow_html=True)
 
@@ -198,7 +200,8 @@ with tab_tracker:
                             xaxis_title="ITC Status", yaxis_title="Total Tenders",
                             plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', font=dict(color='white')
                         )
-                        st.plotly_chart(fig_itc, use_container_width=True)
+                        # Updated to width="stretch"
+                        st.plotly_chart(fig_itc, width="stretch")
                     else:
                         st.info("Not enough valid data to plot ITC distribution.")
                 else:
@@ -217,7 +220,8 @@ with tab_tracker:
                             xaxis_title="Responsible Officer", yaxis_title="Total Active Tenders",
                             plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', font=dict(color='white')
                         )
-                        st.plotly_chart(fig_off, use_container_width=True)
+                        # Updated to width="stretch"
+                        st.plotly_chart(fig_off, width="stretch")
                     else:
                         st.info("Not enough valid data to plot Officer allocation.")
                 else:
@@ -451,14 +455,12 @@ with tab_upload:
     Must have exact column headers: `Tender No` (or `#`), `Tender reference number`, `Title of the tender`, `End user`, `SMT date/PP Planned date of publication`, `Reason of approval/for initiating tender`, `Method of tender`, `Responsible officer`, `ITC`, `Submitted date to ITC for TD approval`, `Comments from ITC`, `Current status`
     """)
 
-    # We now accept BOTH formats directly!
     uploaded_file = st.file_uploader("Upload File", type=["csv", "xlsx", "xls"])
 
     if uploaded_file is not None:
         if st.button("Process and Import Data", type="primary"):
             with st.spinner("Importing Data..."):
                 try:
-                    # Dynamically read Excel or auto-detect CSV delimiters
                     if uploaded_file.name.endswith('.csv'):
                         import_df = pd.read_csv(uploaded_file, sep=None, engine='python')
                     else:
@@ -525,10 +527,11 @@ with tab_logs:
     logs_df = db.get_logs()
     
     if not logs_df.empty:
+        # Updated to width="stretch"
         st.dataframe(
             logs_df, 
             hide_index=True, 
-            use_container_width=True,
+            width="stretch",
             column_config={
                 "timestamp": st.column_config.TextColumn("Time of Change", width="medium"),
                 "message": st.column_config.TextColumn("Action/Modification", width="large")
