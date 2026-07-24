@@ -7,7 +7,6 @@ from datetime import datetime
 DB_FILE = os.getenv("DATABASE_PATH", "tender_tracker.db")
 
 def get_conn():
-    # CRITICAL RAILWAY FIX: Ensure the directory for the database exists
     db_dir = os.path.dirname(DB_FILE)
     if db_dir and not os.path.exists(db_dir):
         os.makedirs(db_dir, exist_ok=True)
@@ -35,6 +34,27 @@ def init_db():
             status TEXT
         )
     ''')
+    
+    # Safely add the new columns to existing databases without dropping data
+    try:
+        c.execute("ALTER TABLE tenders ADD COLUMN date_awarded TEXT")
+    except sqlite3.OperationalError:
+        pass
+    
+    # Soft delete columns
+    try:
+        c.execute("ALTER TABLE tenders ADD COLUMN is_deleted INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        c.execute("ALTER TABLE tenders ADD COLUMN deleted_by TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        c.execute("ALTER TABLE tenders ADD COLUMN deleted_at TEXT")
+    except sqlite3.OperationalError:
+        pass
+        
     c.execute('''
         CREATE TABLE IF NOT EXISTS logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,7 +71,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-# FIX: Bypass pandas read_sql to avoid PyArrow Segmentation Fault
 def get_fiscal_years():
     conn = get_conn()
     c = conn.cursor()
@@ -76,7 +95,6 @@ def log_action(message):
     conn.commit()
     conn.close()
 
-# FIX: Bypass pandas read_sql to avoid PyArrow Segmentation Fault
 def get_logs():
     conn = get_conn()
     c = conn.cursor()
@@ -86,11 +104,11 @@ def get_logs():
     conn.close()
     return pd.DataFrame(data, columns=columns)
 
-# FIX: Bypass pandas read_sql to avoid PyArrow Segmentation Fault
 def load_data(fiscal_year):
     conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT * FROM tenders WHERE fiscal_year = ?", (fiscal_year,))
+    # Only load records that are NOT deleted
+    c.execute("SELECT * FROM tenders WHERE fiscal_year = ? AND (is_deleted = 0 OR is_deleted IS NULL)", (fiscal_year,))
     data = c.fetchall()
     columns = [desc[0] for desc in c.description]
     conn.close()
@@ -109,10 +127,42 @@ def load_data(fiscal_year):
         'itc': 'ITC',
         'itc_submitted_date': 'Submitted date to ITC for TD approval',
         'itc_comments': 'Comments from ITC',
-        'status': 'Current status'
+        'status': 'Current status',
+        'date_awarded': 'Date awarded'
     }
     df.rename(columns=rename_map, inplace=True)
+    # Hide soft delete backend columns from the grid view
+    df.drop(columns=['is_deleted', 'deleted_by', 'deleted_at'], errors='ignore', inplace=True)
     return df
+
+def get_deleted_tenders(fiscal_year):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT * FROM tenders WHERE fiscal_year = ? AND is_deleted = 1", (fiscal_year,))
+    data = c.fetchall()
+    columns = [desc[0] for desc in c.description]
+    conn.close()
+    
+    df = pd.DataFrame(data, columns=columns)
+    if not df.empty:
+        rename_map = {
+            'tender_no': 'Tender No',
+            'tender_ref': 'Tender reference number',
+            'title': 'Title of the tender',
+            'deleted_by': 'Deleted By',
+            'deleted_at': 'Deleted At'
+        }
+        df.rename(columns=rename_map, inplace=True)
+    return df
+
+def delete_tender(db_id, user_name):
+    conn = get_conn()
+    c = conn.cursor()
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    c.execute("UPDATE tenders SET is_deleted = 1, deleted_by = ?, deleted_at = ? WHERE id = ?", (user_name, timestamp, db_id))
+    conn.commit()
+    conn.close()
+    log_action(f"🗑️ Tender ID {db_id} deleted by {user_name}")
 
 def upsert_tender(row_data):
     conn = get_conn()
@@ -128,7 +178,7 @@ def upsert_tender(row_data):
             UPDATE tenders SET 
                 tender_no = ?, title = ?, end_user = ?, smt_date = ?, reason = ?, 
                 method = ?, responsible_officer = ?, itc = ?, itc_submitted_date = ?, 
-                itc_comments = ?, status = ?
+                itc_comments = ?, status = ?, date_awarded = ?, is_deleted = 0, deleted_by = NULL, deleted_at = NULL
             WHERE id = ?
         ''', (
             row_data.get('Tender No', ''),
@@ -142,15 +192,16 @@ def upsert_tender(row_data):
             row_data.get('Submitted date to ITC for TD approval', ''),
             row_data.get('Comments from ITC', ''),
             row_data.get('Current status', ''),
+            row_data.get('Date awarded', ''),
             existing[0]
         ))
     else:
         c.execute('''
             INSERT INTO tenders (
                 fiscal_year, tender_no, tender_ref, title, end_user, smt_date, reason,
-                method, responsible_officer, itc, itc_submitted_date, itc_comments, status
+                method, responsible_officer, itc, itc_submitted_date, itc_comments, status, date_awarded, is_deleted
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
         ''', (
             row_data['fiscal_year'],
             row_data.get('Tender No', ''),
@@ -164,7 +215,8 @@ def upsert_tender(row_data):
             row_data.get('ITC', ''),
             row_data.get('Submitted date to ITC for TD approval', ''),
             row_data.get('Comments from ITC', ''),
-            row_data.get('Current status', 'Planned')
+            row_data.get('Current status', 'Planned'),
+            row_data.get('Date awarded', '')
         ))
     conn.commit()
     conn.close()
@@ -184,7 +236,7 @@ def upsert_tenders_bulk(rows_data):
                 UPDATE tenders SET 
                     tender_no = ?, title = ?, end_user = ?, smt_date = ?, reason = ?, 
                     method = ?, responsible_officer = ?, itc = ?, itc_submitted_date = ?, 
-                    itc_comments = ?, status = ?
+                    itc_comments = ?, status = ?, date_awarded = ?, is_deleted = 0, deleted_by = NULL, deleted_at = NULL
                 WHERE id = ?
             ''', (
                 row_data.get('Tender No', ''),
@@ -198,15 +250,16 @@ def upsert_tenders_bulk(rows_data):
                 row_data.get('Submitted date to ITC for TD approval', ''),
                 row_data.get('Comments from ITC', ''),
                 row_data.get('Current status', ''),
+                row_data.get('Date awarded', ''),
                 existing[0]
             ))
         else:
             c.execute('''
                 INSERT INTO tenders (
                     fiscal_year, tender_no, tender_ref, title, end_user, smt_date, reason,
-                    method, responsible_officer, itc, itc_submitted_date, itc_comments, status
+                    method, responsible_officer, itc, itc_submitted_date, itc_comments, status, date_awarded, is_deleted
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
             ''', (
                 row_data['fiscal_year'],
                 row_data.get('Tender No', ''),
@@ -220,7 +273,8 @@ def upsert_tenders_bulk(rows_data):
                 row_data.get('ITC', ''),
                 row_data.get('Submitted date to ITC for TD approval', ''),
                 row_data.get('Comments from ITC', ''),
-                row_data.get('Current status', 'Planned')
+                row_data.get('Current status', 'Planned'),
+                row_data.get('Date awarded', '')
             ))
     
     conn.commit()

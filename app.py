@@ -44,7 +44,7 @@ METHOD_OPTIONS = ["", "NCB", "ICB", "RFQ", "Direct Procurement", "Framework", "O
 ITC_OPTIONS = ["", "ITC1", "ITC2", "ITC3", "ITC4"]
 STATUS_OPTIONS = ["", "Planned", "Draft", "Published", "Under Evaluation", "Awarded", "Cancelled"]
 
-# --- POP-UP DIALOG FOR RICH TEXT EDITING ---
+# --- POP-UP DIALOGS ---
 @st.dialog("✏️ Edit Tender Details", width="large")
 def edit_row_dialog(row_data, active_fy):
     st.markdown(f"**Editing Tender Ref:** `{row_data.get('Tender reference number', 'N/A')}`")
@@ -62,19 +62,25 @@ def edit_row_dialog(row_data, active_fy):
     raw_itc_date = row_data.get("Submitted date to ITC for TD approval", "")
     try: default_itc_date = pd.to_datetime(raw_itc_date).date() if pd.notna(raw_itc_date) and str(raw_itc_date).strip() != "" else None
     except: default_itc_date = None
+    
+    raw_awarded_date = row_data.get("Date awarded", "")
+    try: default_awarded_date = pd.to_datetime(raw_awarded_date).date() if pd.notna(raw_awarded_date) and str(raw_awarded_date).strip() != "" else None
+    except: default_awarded_date = None
 
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     with c1:
         new_t_no = st.text_input("Tender No", value=row_data.get("Tender No", ""))
         new_user = st.text_input("End user", value=row_data.get("End user", ""))
         new_status = st.selectbox("Current status", STATUS_OPTIONS, index=status_idx)
     with c2:
-        new_smt = st.date_input("SMT date / Planned date", value=default_smt)
+        new_smt = st.date_input("SMT / Planned date", value=default_smt)
         new_method = st.selectbox("Method of tender", METHOD_OPTIONS, index=method_idx)
         new_officer = st.text_input("Responsible officer", value=row_data.get("Responsible officer", ""))
     with c3:
         new_itc = st.selectbox("ITC", ITC_OPTIONS, index=itc_idx)
         new_itc_date = st.date_input("Date submitted to ITC", value=default_itc_date)
+    with c4:
+        new_awarded_date = st.date_input("Date awarded", value=default_awarded_date)
 
     st.divider()
     
@@ -101,13 +107,33 @@ def edit_row_dialog(row_data, active_fy):
             'ITC': new_itc,
             'Submitted date to ITC for TD approval': new_itc_date.strftime('%Y-%m-%d') if new_itc_date else "",
             'Comments from ITC': new_itc_com,
-            'Current status': new_status
+            'Current status': new_status,
+            'Date awarded': new_awarded_date.strftime('%Y-%m-%d') if new_awarded_date else ""
         }
         db.upsert_tender(updated_row)
         db.log_action(f"✏️ Rich-text update made to tender: '{updated_row['Tender reference number']}'")
         st.success("Changes Saved!")
         time.sleep(0.5)
         st.rerun()
+
+@st.dialog("🗑️ Confirm Deletion")
+def delete_row_dialog(row_data):
+    st.warning(f"Are you sure you want to delete Tender Ref: `{row_data.get('Tender reference number', 'N/A')}`?")
+    user_name = st.text_input("Enter your name to confirm deletion:")
+    
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Cancel", width="stretch"):
+            st.rerun()
+    with c2:
+        if st.button("Delete Permanently", type="primary", width="stretch"):
+            if not user_name.strip():
+                st.error("⚠️ Your name is required to process the deletion.")
+            else:
+                db.delete_tender(row_data['id'], user_name.strip())
+                st.success("Tender deleted successfully.")
+                time.sleep(0.5)
+                st.rerun()
 
 # --- HEADER & FISCAL YEAR MANAGEMENT ---
 col_logo, col_title = st.columns([1, 15])
@@ -141,7 +167,7 @@ with col_fy2:
 st.markdown("<hr style='margin-top: 15px; margin-bottom: 15px; border: 0; border-top: 1px solid #eee;' />", unsafe_allow_html=True)
 
 # --- TABS ---
-tab_tracker, tab_upload, tab_logs = st.tabs(["📊 Tender Tracker & Analytics", "📂 Upload Data", "📝 Edit Trail"])
+tab_tracker, tab_upload, tab_logs, tab_deleted = st.tabs(["📊 Tender Tracker & Analytics", "📂 Upload Data", "📝 Edit Trail", "🗑️ Deleted Records"])
 
 # ==========================================
 # TAB 1: THE MAIN TRACKER
@@ -150,14 +176,34 @@ with tab_tracker:
     df = db.load_data(selected_fy)
     
     if df.empty:
-        st.warning(f"📭 No tenders found for {selected_fy}. Upload an Excel/CSV file or add manually.")
+        st.warning(f"📭 No active tenders found for {selected_fy}. Upload an Excel/CSV file or add manually.")
     else:
         if 'Tender No' in df.columns:
             df['Tender No'] = df['Tender No'].astype(str).str.replace(r'\.0$', '', regex=True).replace('nan', '')
 
-        for col in ['SMT date/PP Planned date of publication', 'Submitted date to ITC for TD approval']:
+        for col in ['SMT date/PP Planned date of publication', 'Submitted date to ITC for TD approval', 'Date awarded']:
             if col in df.columns:
                 df[col] = pd.to_datetime(df[col], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
+            elif col == 'Date awarded':
+                df['Date awarded'] = ""
+
+        # --- KPI CALCULATION FOR AVG DAYS TO CLOSE ---
+        today_str = datetime.today().strftime('%Y-%m-%d')
+        calc_df = df.copy()
+        
+        calc_df['Sub_Date'] = pd.to_datetime(calc_df['Submitted date to ITC for TD approval'], errors='coerce')
+        calc_df['Award_Date'] = pd.to_datetime(calc_df['Date awarded'], errors='coerce')
+        
+        # Only compute for rows that have a Submitted Date
+        valid_tenders = calc_df.dropna(subset=['Sub_Date']).copy()
+        
+        # If Date Awarded is empty, use today's date
+        valid_tenders['Award_Date'] = valid_tenders['Award_Date'].fillna(pd.to_datetime(today_str))
+        
+        # Calculate days to close
+        valid_tenders['Days_to_Close'] = (valid_tenders['Award_Date'] - valid_tenders['Sub_Date']).dt.days
+        
+        avg_days_to_close = int(valid_tenders['Days_to_Close'].mean()) if not valid_tenders.empty and not valid_tenders['Days_to_Close'].isna().all() else 0
 
         # --- ANALYTICS & KPIs ---
         total_tenders = len(df)
@@ -166,15 +212,16 @@ with tab_tracker:
         published = len(df[df["Current status"] == "Published"])
         planned = len(df[df["Current status"] == "Planned"])
 
-        met1, met2, met3, met4, met5 = st.columns(5)
+        met1, met2, met3, met4, met5, met6 = st.columns(6)
         with met1: st.markdown(create_kpi_card("Total Tenders", total_tenders, "#f8f9fa", "#2c3e50", "#e9ecef"), unsafe_allow_html=True)
         with met2: st.markdown(create_kpi_card("Awarded ✅", awarded, "#d4edda", "#155724", "#c3e6cb"), unsafe_allow_html=True)
         with met3: st.markdown(create_kpi_card("Evaluation 🔄", evaluation, "#fff3cd", "#856404", "#ffeeba"), unsafe_allow_html=True)
         with met4: st.markdown(create_kpi_card("Published 📢", published, "#cce5ff", "#004085", "#b8daff"), unsafe_allow_html=True)
         with met5: st.markdown(create_kpi_card("Planned ⏳", planned, "#e2e3e5", "#383d41", "#d6d8db"), unsafe_allow_html=True)
+        with met6: st.markdown(create_kpi_card("Avg Days Close ⏱️", avg_days_to_close, "#f3e5f5", "#4a148c", "#e1bee7"), unsafe_allow_html=True)
 
         with st.expander("📈 View Analytics & Allocation Charts", expanded=False):
-            tab_itc_chart, tab_officer_chart = st.tabs(["📊 ITC Status Distribution", "📊 Officer Workload Allocation"])
+            tab_closure_chart, tab_itc_chart, tab_officer_chart = st.tabs(["📊 Days taken to close a tender", "📊 ITC Status Distribution", "📊 Officer Workload Allocation"])
             
             color_map = {
                 'Awarded': '#28a745', 
@@ -184,6 +231,54 @@ with tab_tracker:
                 'Planned': '#6c757d',
                 'Draft': '#adb5bd'
             }
+
+            with tab_closure_chart:
+                df_closure = valid_tenders[valid_tenders['ITC'].astype(str).str.strip() != '']
+                if not df_closure.empty:
+                    df_closure_grouped = df_closure.groupby('ITC').agg(
+                        min_days=('Days_to_Close', 'min'),
+                        max_days=('Days_to_Close', 'max'),
+                        avg_days=('Days_to_Close', 'mean')
+                    ).reset_index()
+                    
+                    df_closure_grouped['avg_days'] = df_closure_grouped['avg_days'].round(1)
+                    
+                    df_closure_grouped['Efficiency_Score'] = df_closure_grouped['avg_days'].apply(
+                        lambda x: min(100, round(100 * (30 / x))) if x > 0 else 100
+                    )
+                    
+                    df_closure_grouped['custom_text'] = df_closure_grouped.apply(
+                        lambda row: f"(min={int(row['min_days'])}, avg={row['avg_days']}, max={int(row['max_days'])}) | Efficiency: {row['Efficiency_Score']}%", 
+                        axis=1
+                    )
+                    
+                    fig_closure = px.bar(
+                        df_closure_grouped, y='ITC', x='avg_days', 
+                        text='custom_text', color='ITC', orientation='h',
+                        color_discrete_sequence=px.colors.qualitative.Pastel
+                    )
+                    
+                    fig_closure.update_traces(
+                        textposition='inside', 
+                        insidetextfont=dict(color='#2c3e50', size=14, family="Arial Black"),
+                        marker_line_color='rgba(0,0,0,0.1)', 
+                        marker_line_width=1
+                    )
+                    
+                    fig_closure.update_layout(
+                        xaxis_title="Average Days to Close", 
+                        yaxis_title="",
+                        plot_bgcolor='rgba(0,0,0,0)', 
+                        paper_bgcolor='rgba(0,0,0,0)',
+                        height=350,
+                        margin=dict(l=0, r=0, t=20, b=0),
+                        showlegend=False,
+                        xaxis=dict(showgrid=True, gridcolor='rgba(128,128,128,0.2)'),
+                        yaxis=dict(showgrid=False)
+                    )
+                    st.plotly_chart(fig_closure, use_container_width=True)
+                else:
+                    st.info("Not enough valid data (missing submitted dates) to plot ITC closure time.")
 
             with tab_itc_chart:
                 df_itc = df[df['ITC'].astype(str).str.strip() != '']
@@ -223,11 +318,11 @@ with tab_tracker:
                 else:
                     st.info("No Responsible Officers assigned yet.")
 
-        st.info("💡 **Quick Guide:** Click any cell to inline edit! Check the box next to a Tender No to open the rich-text editor.")
+        st.info("💡 **Quick Guide:** Click any cell to inline edit! Check the box next to a Tender No to open the rich-text editor or delete it.")
         
         with st.expander("➕ Add New Tender manually", expanded=False):
             with st.form("add_tender_form", clear_on_submit=True):
-                c1, c2, c3 = st.columns(3)
+                c1, c2, c3, c4 = st.columns(4)
                 with c1:
                     new_t_no = st.text_input("Tender No")
                     new_ref = st.text_input("Tender reference number *Required*")
@@ -243,6 +338,8 @@ with tab_tracker:
                     new_itc_date = st.date_input("Submitted date to ITC for TD approval", value=None)
                     new_itc_com = st.text_area("Comments from ITC", height=100)
                     new_status = st.selectbox("Current status", STATUS_OPTIONS)
+                with c4:
+                    new_awarded_date = st.date_input("Date awarded", value=None)
                 
                 if st.form_submit_button("Save to Database", type="primary"):
                     if new_ref.strip() == "":
@@ -261,7 +358,8 @@ with tab_tracker:
                             'ITC': new_itc,
                             'Submitted date to ITC for TD approval': new_itc_date.strftime('%Y-%m-%d') if new_itc_date else "",
                             'Comments from ITC': new_itc_com,
-                            'Current status': new_status
+                            'Current status': new_status,
+                            'Date awarded': new_awarded_date.strftime('%Y-%m-%d') if new_awarded_date else ""
                         }
                         db.upsert_tender(new_row)
                         db.log_action(f"➕ Added new tender '{new_ref}' to {selected_fy}")
@@ -275,11 +373,8 @@ with tab_tracker:
         gb = GridOptionsBuilder.from_dataframe(df.drop(columns=['fiscal_year'], errors='ignore'))
         gb.configure_column('id', hide=True) 
         
-        # FIX: Removed the squishing problem by adding rigid minWidths 
         gb.configure_default_column(wrapText=True, autoHeight=True, editable=True, minWidth=150)
         gb.configure_grid_options(singleClickEdit=True, alwaysShowVerticalScroll=True, domLayout='autoHeight')
-        
-        # FIX: Enable the selection mode, and securely anchor the checkbox to the first column
         gb.configure_selection(selection_mode="single", use_checkbox=True)
         
         rich_text_renderer = JsCode("""
@@ -332,7 +427,6 @@ with tab_tracker:
 
         rich_text_opts = {"editable": False, "cellRenderer": rich_text_renderer}
 
-        # FIX: Checkboxes securely placed next to Tender No, and columns forced to stay wide
         gb.configure_column('Tender No', width=120, minWidth=120, checkboxSelection=True)
         gb.configure_column('Tender reference number', width=250, minWidth=250, editable=False) 
         gb.configure_column('Title of the tender', width=400, minWidth=400, **rich_text_opts)
@@ -346,6 +440,7 @@ with tab_tracker:
         
         gb.configure_column('SMT date/PP Planned date of publication', editable=True, width=250, minWidth=250, cellEditor=custom_date_editor, valueFormatter=date_formatter)
         gb.configure_column('Submitted date to ITC for TD approval', editable=True, width=250, minWidth=250, cellEditor=custom_date_editor, valueFormatter=date_formatter)
+        gb.configure_column('Date awarded', editable=True, width=200, minWidth=200, cellEditor=custom_date_editor, valueFormatter=date_formatter)
         
         status_cellstyle = JsCode("""
         function(params) {
@@ -360,7 +455,6 @@ with tab_tracker:
         
         gb.configure_column("Current status", editable=True, pinned='right', cellStyle=status_cellstyle, cellEditor='agSelectCellEditor', cellEditorParams={'values': STATUS_OPTIONS}, width=160, minWidth=160)
 
-        # FIX: Removed the destructive "overflow: visible" CSS that killed horizontal scrolling
         custom_css = {
             ".ag-header": {
                 "position": "sticky !important",
@@ -382,7 +476,6 @@ with tab_tracker:
 
         selected_rows = grid_response.get("selected_rows")
         
-        # Handle AgGrid versions differences natively
         has_selection = False
         if isinstance(selected_rows, pd.DataFrame):
             if not selected_rows.empty:
@@ -394,13 +487,23 @@ with tab_tracker:
                 selected_data = selected_rows[0]
 
         if has_selection:
-            with action_container_top:
-                if st.button("✏️ Edit Selected Row ⬆️", type="primary", key="btn_edit_top"):
-                    edit_row_dialog(selected_data, selected_fy)
+            with action_container_top.container():
+                c1, c2, _ = st.columns([2, 2, 8])
+                with c1:
+                    if st.button("✏️ Edit Selected Row ⬆️", type="primary", use_container_width=True, key="btn_edit_top"):
+                        edit_row_dialog(selected_data, selected_fy)
+                with c2:
+                    if st.button("🗑️ Delete Selected Row ⬆️", type="secondary", use_container_width=True, key="btn_del_top"):
+                        delete_row_dialog(selected_data)
                     
-            with action_container_bottom:
-                if st.button("✏️ Edit Selected Row ⬇️", type="primary", key="btn_edit_bot"):
-                    edit_row_dialog(selected_data, selected_fy)
+            with action_container_bottom.container():
+                c1, c2, _ = st.columns([2, 2, 8])
+                with c1:
+                    if st.button("✏️ Edit Selected Row ⬇️", type="primary", use_container_width=True, key="btn_edit_bot"):
+                        edit_row_dialog(selected_data, selected_fy)
+                with c2:
+                    if st.button("🗑️ Delete Selected Row ⬇️", type="secondary", use_container_width=True, key="btn_del_bot"):
+                        delete_row_dialog(selected_data)
 
         # --- SQLITE SYNC FOR INLINE EDITS ---
         edited_df = grid_response['data']
@@ -414,7 +517,8 @@ with tab_tracker:
             'Responsible officer': 'responsible_officer',
             'ITC': 'itc',
             'Submitted date to ITC for TD approval': 'itc_submitted_date',
-            'Current status': 'status'
+            'Current status': 'status',
+            'Date awarded': 'date_awarded'
         }
 
         for index, new_row in edited_df.iterrows():
@@ -435,7 +539,7 @@ with tab_tracker:
                     new_val = str(new_row[col]).strip() if pd.notna(new_row[col]) else ""
                     
                     if old_val != new_val:
-                        if col in ['SMT date/PP Planned date of publication', 'Submitted date to ITC for TD approval']:
+                        if col in ['SMT date/PP Planned date of publication', 'Submitted date to ITC for TD approval', 'Date awarded']:
                             try: new_val = pd.to_datetime(new_val).strftime('%Y-%m-%d')
                             except: new_val = ""
                         
@@ -457,7 +561,7 @@ with tab_upload:
     st.subheader(f"📂 Upload Data to [{selected_fy}]")
     st.markdown("""
     **You can now upload standard Excel (.xlsx) or CSV files.**
-    Must have exact column headers: `Tender No` (or `#`), `Tender reference number`, `Title of the tender`, `End user`, `SMT date/PP Planned date of publication`, `Reason of approval/for initiating tender`, `Method of tender`, `Responsible officer`, `ITC`, `Submitted date to ITC for TD approval`, `Comments from ITC`, `Current status`
+    Must have exact column headers: `Tender No` (or `#`), `Tender reference number`, `Title of the tender`, `End user`, `SMT date/PP Planned date of publication`, `Reason of approval/for initiating tender`, `Method of tender`, `Responsible officer`, `ITC`, `Submitted date to ITC for TD approval`, `Comments from ITC`, `Current status`, `Date awarded`
     """)
 
     with st.form("upload_form", clear_on_submit=True):
@@ -500,6 +604,10 @@ with tab_upload:
                             raw_itc_d = str(row.get('Submitted date to ITC for TD approval', '')).strip()
                             try: clean_itc_d = pd.to_datetime(raw_itc_d).strftime('%Y-%m-%d') if raw_itc_d and raw_itc_d.lower() != 'nan' else ""
                             except: clean_itc_d = ""
+                            
+                            raw_awd_d = str(row.get('Date awarded', '')).strip()
+                            try: clean_awd_d = pd.to_datetime(raw_awd_d).strftime('%Y-%m-%d') if raw_awd_d and raw_awd_d.lower() != 'nan' else ""
+                            except: clean_awd_d = ""
 
                             raw_itc = str(row.get('ITC', '')).strip().upper().replace(" ", "")
                             clean_itc = raw_itc if raw_itc in ["ITC1", "ITC2", "ITC3", "ITC4"] else ""
@@ -517,7 +625,8 @@ with tab_upload:
                                 'ITC': clean_itc,
                                 'Submitted date to ITC for TD approval': clean_itc_d,
                                 'Comments from ITC': str(row.get('Comments from ITC', '')).strip() if pd.notna(row.get('Comments from ITC')) else "",
-                                'Current status': str(row.get('Current status', '')).strip() if pd.notna(row.get('Current status')) else ""
+                                'Current status': str(row.get('Current status', '')).strip() if pd.notna(row.get('Current status')) else "",
+                                'Date awarded': clean_awd_d
                             }
                             
                             rows_to_insert.append(row_dict)
@@ -554,3 +663,27 @@ with tab_logs:
         )
     else:
         st.info("No modifications have been logged yet.")
+
+# ==========================================
+# TAB 4: DELETED RECORDS
+# ==========================================
+with tab_deleted:
+    st.subheader(f"🗑️ Deleted Tenders for [{selected_fy}]")
+    st.markdown("View all softly deleted records, the person who deleted them, and the time of deletion.")
+    
+    deleted_df = db.get_deleted_tenders(selected_fy)
+    
+    if deleted_df.empty:
+        st.info("There are currently no deleted records in this fiscal year.")
+    else:
+        st.metric("Total Deleted Records", len(deleted_df))
+        
+        st.dataframe(
+            deleted_df[['id', 'Tender No', 'Tender reference number', 'Title of the tender', 'Deleted By', 'Deleted At']], 
+            hide_index=True, 
+            width="stretch",
+            column_config={
+                "id": None, # Hide the ID column
+                "Deleted At": st.column_config.TextColumn("Time of Deletion", width="medium"),
+            }
+        )
