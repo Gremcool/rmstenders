@@ -1,0 +1,7 @@
+# Never commit or ship the live database or its backups - pushing code must not touch your data
+*.db
+*.db-wal
+*.db-shm
+backups/
+__pycache__/
+*.pyc
